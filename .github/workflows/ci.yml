@@ -1,0 +1,37 @@
+name: CI - Build and Update GitOps
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push image
+        run: |
+          TAG=${{ github.sha }}
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/cake-app:$TAG .
+          docker push ${{ secrets.DOCKER_USERNAME }}/cake-app:$TAG
+          echo "IMAGE_TAG=$TAG" >> $GITHUB_ENV
+
+      - name: Update GitOps repo
+        run: |
+          git clone https://${{ secrets.GH_PAT }}@github.com/sven110sugar/cake-gitops-manifests.git
+          cd cake-gitops-manifests
+          sed -i "s|image: .*/cake-app:.*|image: ${{ secrets.DOCKER_USERNAME }}/cake-app:${{ env.IMAGE_TAG }}|" dev/deployment.yaml
+          git config user.name "CI Bot"
+          git config user.email "ci@bot.com"
+          git add dev/deployment.yaml
+          git commit -m "Update image to ${{ env.IMAGE_TAG }}" || echo "No changes"
+          git push
