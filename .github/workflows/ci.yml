@@ -57,13 +57,16 @@ jobs:
           TAG=${{ needs.build-and-push.outputs.image_tag }}
           git clone https://${{ secrets.GH_PAT }}@github.com/sven110sugar/cake-gitops-manifests.git
           cd cake-gitops-manifests
+          rm -rf ${{ matrix.env }}/rendered
+          mkdir -p ${{ matrix.env }}/rendered
           helm template cake-app charts/cake-app \
             -f ${{ matrix.env }}/values.yaml \
             --set image.tag=$TAG \
-            > ${{ matrix.env }}/manifests.yaml
+            --output-dir ${{ matrix.env }}/rendered \
+            --include-crds
           git config user.name "CI Bot"
           git config user.email "ci@bot.com"
-          git add ${{ matrix.env }}/manifests.yaml
+          git add ${{ matrix.env }}/rendered/
           git commit -m "[${{ matrix.env }}] Update image to $TAG" || echo "No changes, skipping"
           git push
 
@@ -82,12 +85,15 @@ jobs:
           ENV=${{ inputs.environment }}
           git clone https://${{ secrets.GH_PAT }}@github.com/sven110sugar/cake-gitops-manifests.git
           cd cake-gitops-manifests
+          rm -rf $ENV/rendered
+          mkdir -p $ENV/rendered
           helm template cake-app charts/cake-app \
             -f $ENV/values.yaml \
             --set image.tag=$TAG \
-            > $ENV/manifests.yaml
+            --output-dir $ENV/rendered \
+            --include-crds
           git config user.name "CI Bot"
           git config user.email "ci@bot.com"
-          git add $ENV/manifests.yaml
+          git add $ENV/rendered/
           git commit -m "[$ENV] Update image to $TAG" || echo "No changes, skipping"
           git push
