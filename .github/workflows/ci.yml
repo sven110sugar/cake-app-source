@@ -5,10 +5,22 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deploy to which environment?'
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+        default: 'dev'
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.build.outputs.TAG }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -20,19 +32,62 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Build and push image
+        id: build
         run: |
           TAG=${{ github.sha }}
           docker build -t ${{ secrets.DOCKER_USERNAME }}/cake-app:$TAG .
           docker push ${{ secrets.DOCKER_USERNAME }}/cake-app:$TAG
+          echo "TAG=$TAG" >> $GITHUB_OUTPUT
           echo "IMAGE_TAG=$TAG" >> $GITHUB_ENV
 
-      - name: Update GitOps repo
+  # push main → 自动发布 dev + staging
+  deploy-dev-staging:
+    needs: build-and-push
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        env: [dev, staging]
+    steps:
+      - name: Install Helm
+        run: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Render and push for ${{ matrix.env }}
         run: |
+          TAG=${{ needs.build-and-push.outputs.image_tag }}
           git clone https://${{ secrets.GH_PAT }}@github.com/sven110sugar/cake-gitops-manifests.git
           cd cake-gitops-manifests
-          sed -i "s|image: .*/cake-app:.*|image: ${{ secrets.DOCKER_USERNAME }}/cake-app:${{ env.IMAGE_TAG }}|" dev/deployment.yaml
+          helm template cake-app charts/cake-app \
+            -f ${{ matrix.env }}/values.yaml \
+            --set image.tag=$TAG \
+            > ${{ matrix.env }}/manifests.yaml
           git config user.name "CI Bot"
           git config user.email "ci@bot.com"
-          git add dev/deployment.yaml
-          git commit -m "Update image to ${{ env.IMAGE_TAG }}" || echo "No changes"
+          git add ${{ matrix.env }}/manifests.yaml
+          git commit -m "[${{ matrix.env }}] Update image to $TAG" || echo "No changes, skipping"
+          git push
+
+  # workflow_dispatch 选环境 → 手动发布到指定环境(含 prod)
+  deploy-manual:
+    needs: build-and-push
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Helm
+        run: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Render and push for ${{ inputs.environment }}
+        run: |
+          TAG=${{ needs.build-and-push.outputs.image_tag }}
+          ENV=${{ inputs.environment }}
+          git clone https://${{ secrets.GH_PAT }}@github.com/sven110sugar/cake-gitops-manifests.git
+          cd cake-gitops-manifests
+          helm template cake-app charts/cake-app \
+            -f $ENV/values.yaml \
+            --set image.tag=$TAG \
+            > $ENV/manifests.yaml
+          git config user.name "CI Bot"
+          git config user.email "ci@bot.com"
+          git add $ENV/manifests.yaml
+          git commit -m "[$ENV] Update image to $TAG" || echo "No changes, skipping"
           git push
